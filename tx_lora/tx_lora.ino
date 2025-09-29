@@ -320,7 +320,7 @@ void sendFileDataPacket(void) {
   txpacket[4] = total_fragments & 0xFF;
   
   // Read data from file
-  size_t bytes_to_read = min((size_t)MAX_DATA_SIZE, file_size - bytes_sent);
+  size_t bytes_to_read = (size_t)min((uint32_t)MAX_DATA_SIZE, file_size - bytes_sent);
   size_t bytes_read = pdfFile.read((uint8_t*)&txpacket[6], bytes_to_read);
   
   txpacket[5] = bytes_read;  // data length
