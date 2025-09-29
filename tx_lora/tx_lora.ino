@@ -109,10 +109,10 @@ void setup() {
   
   // Check if file exists and initialize transfer
   if (LittleFS.exists(FILE_PATH)) {
-    Serial.println("PDF file found, ready for transmission");
+    Serial.printf("PDF file found: %s, ready for transmission\r\n", FILE_PATH);
     file_transfer_mode = true;
   } else {
-    Serial.println("PDF file not found, using normal mode");
+    Serial.printf("PDF file not found at %s, using normal mode\r\n", FILE_PATH);
     file_transfer_mode = false;
   }
 }
@@ -338,12 +338,23 @@ void sendFileDataPacket(void) {
 void sendFileEndPacket(void) {
   // Calculate CRC32 of entire file
   pdfFile.seek(0);
-  uint32_t crc = 0;
+  uint32_t crc = 0xFFFFFFFF;
   uint8_t buffer[64];
+  
   while (pdfFile.available()) {
     size_t bytes_read = pdfFile.read(buffer, sizeof(buffer));
-    crc = calculateCRC32(buffer, bytes_read);  // Simple CRC implementation
+    for (size_t i = 0; i < bytes_read; i++) {
+      crc ^= buffer[i];
+      for (int j = 0; j < 8; j++) {
+        if (crc & 1) {
+          crc = (crc >> 1) ^ 0xEDB88320;
+        } else {
+          crc >>= 1;
+        }
+      }
+    }
   }
+  crc = ~crc;  // Final inversion
   
   memset(txpacket, 0, BUFFER_SIZE);
   
@@ -386,7 +397,7 @@ void handleTimeout(void) {
 
 // Simple CRC32 implementation
 uint32_t calculateCRC32(const uint8_t* data, size_t length) {
-  static uint32_t crc = 0xFFFFFFFF;
+  uint32_t crc = 0xFFFFFFFF;
   
   for (size_t i = 0; i < length; i++) {
     crc ^= data[i];
@@ -399,5 +410,5 @@ uint32_t calculateCRC32(const uint8_t* data, size_t length) {
     }
   }
   
-  return crc;
+  return ~crc;  // Final inversion
 }

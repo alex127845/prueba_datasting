@@ -269,8 +269,23 @@ void sendAck(void) {
   ack_packet[4] = 0;
   ack_packet[5] = 0;  // no data
   
+  // Switch to TX mode, send ACK, then back to RX
+  Radio.SetTxConfig(MODEM_LORA, 5, 0,  // 5 dBm TX power
+                    LORA_BANDWIDTH, LORA_SF, LORA_CR,
+                    LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
+                    true, 0, 0, LORA_IQ_INVERSION_ON, 3000);
+  
   Radio.Send(ack_packet, 6);
-  delay(10);  // Small delay before going back to RX
+  delay(100);  // Wait for transmission to complete
+  
+  // Switch back to RX
+  Radio.SetRxConfig(
+    MODEM_LORA, LORA_BANDWIDTH, LORA_SF, LORA_CR,
+    0, LORA_PREAMBLE_LENGTH, LORA_SYMBOL_TIMEOUT,
+    LORA_FIX_LENGTH_PAYLOAD_ON,
+    LORA_FIX_LENGTH_PAYLOAD_ON ? PAYLOAD_SIZE_HINT : 0,
+    true, false, 0, LORA_IQ_INVERSION_ON, RX_CONTINUOUS
+  );
 }
 
 void sendNack(void) {
@@ -282,8 +297,23 @@ void sendNack(void) {
   nack_packet[4] = 0;
   nack_packet[5] = 0;
   
+  // Switch to TX mode, send NACK, then back to RX
+  Radio.SetTxConfig(MODEM_LORA, 5, 0,
+                    LORA_BANDWIDTH, LORA_SF, LORA_CR,
+                    LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
+                    true, 0, 0, LORA_IQ_INVERSION_ON, 3000);
+  
   Radio.Send(nack_packet, 6);
-  delay(10);
+  delay(100);
+  
+  // Switch back to RX
+  Radio.SetRxConfig(
+    MODEM_LORA, LORA_BANDWIDTH, LORA_SF, LORA_CR,
+    0, LORA_PREAMBLE_LENGTH, LORA_SYMBOL_TIMEOUT,
+    LORA_FIX_LENGTH_PAYLOAD_ON,
+    LORA_FIX_LENGTH_PAYLOAD_ON ? PAYLOAD_SIZE_HINT : 0,
+    true, false, 0, LORA_IQ_INVERSION_ON, RX_CONTINUOUS
+  );
 }
 
 void handleFileStartPacket(uint8_t* payload, uint16_t size) {
@@ -356,7 +386,12 @@ void handleFileDataPacket(uint8_t* payload, uint16_t size) {
 
 void handleFileEndPacket(uint8_t* payload, uint16_t size) {
   if (rx_transfer_state != RX_RECEIVING_FILE) {
-    sendNack();
+    // Might be duplicate END packet, send ACK anyway if we completed transfer
+    if (rx_transfer_state == RX_FILE_COMPLETE) {
+      sendAck();
+    } else {
+      sendNack();
+    }
     return;
   }
   
@@ -457,7 +492,7 @@ void resetFileTransfer(void) {
 }
 
 uint32_t calculateCRC32(const uint8_t* data, size_t length) {
-  static uint32_t crc = 0xFFFFFFFF;
+  uint32_t crc = 0xFFFFFFFF;
   
   for (size_t i = 0; i < length; i++) {
     crc ^= data[i];
@@ -470,18 +505,31 @@ uint32_t calculateCRC32(const uint8_t* data, size_t length) {
     }
   }
   
-  return crc;
+  return ~crc;  // Final inversion
 }
 
 bool validateFileIntegrity(uint32_t expected_crc) {
   received_file.seek(0);
-  uint32_t calculated_crc = 0;
+  uint32_t calculated_crc = 0xFFFFFFFF;
   uint8_t buffer[64];
   
   while (received_file.available()) {
     size_t bytes_read = received_file.read(buffer, sizeof(buffer));
-    calculated_crc = calculateCRC32(buffer, bytes_read);
+    for (size_t i = 0; i < bytes_read; i++) {
+      calculated_crc ^= buffer[i];
+      for (int j = 0; j < 8; j++) {
+        if (calculated_crc & 1) {
+          calculated_crc = (calculated_crc >> 1) ^ 0xEDB88320;
+        } else {
+          calculated_crc >>= 1;
+        }
+      }
+    }
   }
+  calculated_crc = ~calculated_crc;  // Final inversion
+  
+  Serial.printf("Expected CRC: 0x%08X, Calculated CRC: 0x%08X\r\n", 
+                (unsigned)expected_crc, (unsigned)calculated_crc);
   
   return calculated_crc == expected_crc;
 }
